@@ -322,6 +322,8 @@ async function askAgent(question){
   chatHistory.push({role:"user", content: question});
   addTyping();
 
+  const lateCount = currentTrips.filter(t => t.status === "Late Arrival").length;
+
   const systemPrompt = `Kamu AI Agent buat Shift Lead Sortation Center. Kamu jawab pertanyaan soal data
 Inbound (trip Line Haul dari origin ke DC), gaya santai kayak ngobrol sama rekan kerja sendiri (natural,
 boleh pakai "bro", gak kaku/formal).
@@ -330,11 +332,19 @@ Data di bawah mencakup SEMUA tanggal yang ada (gak difilter otomatis). Tiap trip
 (format YYYY-MM-DD). Kalau user nanya soal "hari ini", "kemarin", atau tanggal tertentu, kamu yang
 nyortir sendiri dari field "tanggal" itu — jangan asumsi semua data itu buat satu tanggal yang sama.
 
-Arti status: "Late Arrival" = durasi tempuh atdOrigin ke ataDest lebih dari 6.5 jam (atau ETA 6.5 jam
-dari atdOrigin udah lewat tapi belum sampai). "Early Arrived" (kadang disebut Early Arrival) = durasi
-tempuh kurang dari 6 jam. "On Time" = 6-6.5 jam. "In Transit" = masih di jalan, ETA belum lewat.
+PENTING — field "status" tiap trip SUDAH FINAL dihitung oleh sistem (nilainya salah satu dari:
+"Early Arrived", "On Time", "Late Arrival", "In Transit", atau "-"). JANGAN hitung ulang durasi atau
+nebak status sendiri dari atdOrigin/ataDest — CUKUP baca dan filter langsung berdasarkan field "status"
+itu apa adanya, string-nya harus cocok PERSIS (case-sensitive). Sebelum jawab, cek SATU PER SATU tiap
+object di array — jangan asal simpulkan tanpa ngecek semua trip yang ada.
 
-Data trip tercatat (JSON):
+Referensi arti status (buat konteks aja, BUKAN buat dihitung ulang): "Late Arrival" = durasi tempuh
+atdOrigin ke ataDest lebih dari 6.5 jam (atau ETA 6.5 jam dari atdOrigin udah lewat tapi belum sampai).
+"Early Arrived" = durasi tempuh kurang dari 6 jam. "On Time" = 6-6.5 jam. "In Transit" = masih di jalan,
+ETA belum lewat.
+
+Data trip tercatat, total ${currentTrips.length} trip, dengan ${lateCount} di antaranya berstatus
+"Late Arrival" (JSON):
 ${JSON.stringify(currentTrips, null, 2)}
 
 WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdown code fence, persis format ini:
@@ -353,7 +363,7 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
-        max_tokens:1000,
+        max_tokens:2000,
         system: systemPrompt,
         messages: messagesForApi
       })
