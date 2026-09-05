@@ -53,12 +53,6 @@
   }
   .topbar .stat{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted);}
   .topbar .stat b{color:var(--text);}
-  .switch{position:relative; width:34px; height:18px; flex:none;}
-  .switch input{opacity:0; width:0; height:0; position:absolute;}
-  .slider{position:absolute; inset:0; background:#39424F; border-radius:20px; cursor:pointer; transition:.15s;}
-  .slider:before{content:""; position:absolute; height:12px; width:12px; left:3px; top:3px; background:var(--text); border-radius:50%; transition:.15s;}
-  .switch input:checked + .slider{background:var(--cyan);}
-  .switch input:checked + .slider:before{transform:translateX(16px); background:#0D1A18;}
   .spacer{flex:1;}
   .icon-btn{
     background:transparent; border:1px solid var(--line); color:var(--muted);
@@ -113,10 +107,6 @@
   }
   .chat-input-row button:disabled{opacity:.5; cursor:default;}
 
-  details.note-details{margin-top:12px; font-size:12px; color:var(--muted);}
-  details.note-details summary{cursor:pointer; color:var(--cyan);}
-  details.note-details .inner{padding:10px 2px 2px; line-height:1.6;}
-  details.note-details code{background:var(--panel-2); padding:1px 5px; border-radius:4px; font-family:'IBM Plex Mono',monospace;}
 </style>
 </head>
 <body>
@@ -131,12 +121,8 @@
   </header>
 
   <div class="topbar">
-    <label for="dateInput">Tanggal</label>
-    <input type="date" id="dateInput">
-    <span class="stat">Live Firebase</span>
-    <label class="switch"><input type="checkbox" id="liveToggle"><span class="slider"></span></label>
-    <div class="spacer"></div>
     <span class="stat" id="quickStat"><b>0</b> trip tercatat</span>
+    <div class="spacer"></div>
     <button class="icon-btn" id="refreshBtn">Refresh Data</button>
   </div>
 
@@ -147,18 +133,6 @@
       <button id="sendBtn">Kirim</button>
     </div>
   </div>
-
-  <details class="note-details">
-    <summary>🔧 Catatan konfigurasi</summary>
-    <div class="inner">
-      File ini baca data dari <code>prDcInboundTracking/lhTracking</code> di Realtime Database,
-      persis kayak yang dipakai <code>inbound.html</code> — dan status Late/Early/On Time dihitung
-      pakai logic yang sama (durasi <code>atdOrigin</code> → <code>ataDest</code>: &lt;6 jam Early Arrived,
-      6–6.5 jam On Time, &gt;6.5 jam Late Arrival). Taruh file ini di folder project yang sama dengan
-      <code>auth-guard.js</code> biar Firebase-nya konek otomatis pakai session login yang udah ada.
-      Sebelum itu, chat ini jalan pakai data contoh (mock).
-    </div>
-  </details>
 
 </div>
 
@@ -226,6 +200,18 @@ function computeStatus(t){
   return { statusText, etaDateObj };
 }
 
+// Sama persis kayak formatDateYYYYMMDD di inbound.html — pakai komponen
+// tanggal LOKAL (getFullYear/getMonth/getDate), BUKAN toISOString().
+// toISOString() selalu balikin tanggal UTC, jadi trip yang atdOrigin-nya
+// jam 00:00-06:59 WIB bakal "mundur" ke hari sebelumnya kalau dihitung
+// pakai toISOString() — ini penyebab Odyssey suka bilang "gak ada Late
+// Arrival hari ini" padahal di dashboard ada.
+function formatDateYYYYMMDDLocal(d){
+  if (!d) return null;
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
 function normalizeTrip(t){
   const { statusText, etaDateObj } = computeStatus(t);
   const dateSourceRaw = t.atdOrigin || t.stdOrigin;
@@ -243,24 +229,27 @@ function normalizeTrip(t){
     atdOrigin: t.atdOrigin || null,
     ataDest: t.ataDest || null,
     etaDest: etaDateObj ? etaDateObj.toISOString() : null,
-    tanggal: dateSource && !isNaN(dateSource) ? dateSource.toISOString().slice(0,10) : null,
+    tanggal: dateSource && !isNaN(dateSource) ? formatDateYYYYMMDDLocal(dateSource) : null,
     status: statusText
   };
 }
 
 async function loadData(){
-  const dateStr = document.getElementById("dateInput").value;
-  const isLive = document.getElementById("liveToggle").checked;
-  document.getElementById("statusLine").textContent = "mode: " + (isLive?"live firebase":"mock data") + " — memuat...";
+  document.getElementById("statusLine").textContent = "mode: live firebase — memuat...";
   try{
-    const raw = isLive ? await fetchLiveTrips() : generateMockData(dateStr);
+    const raw = await fetchLiveTrips();
     const normalized = raw.map(normalizeTrip);
-    currentTrips = dateStr ? normalized.filter(t => t.tanggal === dateStr) : normalized;
+    currentTrips = normalized;
     document.getElementById("quickStat").innerHTML = "<b>"+currentTrips.length+"</b> trip tercatat";
-    document.getElementById("statusLine").textContent = "mode: " + (isLive?"live firebase":"mock data");
+    document.getElementById("statusLine").textContent = "mode: live firebase";
   }catch(e){
     console.error(e);
-    document.getElementById("statusLine").textContent = "gagal ambil data live: " + e.message;
+    // Firebase belum siap (misal belum login) — fallback sementara ke data contoh
+    // biar chat tetap bisa dipakai, sambil nunjukkin statusnya di statusLine.
+    const raw = generateMockData();
+    currentTrips = raw.map(normalizeTrip);
+    document.getElementById("quickStat").innerHTML = "<b>"+currentTrips.length+"</b> trip tercatat";
+    document.getElementById("statusLine").textContent = "gagal konek Firebase (" + e.message + ") — pakai data contoh sementara";
   }
 }
 
@@ -336,10 +325,10 @@ async function askAgent(question){
   chatHistory.push({role:"user", content: question});
   addTyping();
 
-  const dateStr = document.getElementById("dateInput").value;
   const systemPrompt = `Kamu AI Agent buat Shift Lead Sortation Center. Kamu jawab pertanyaan soal data
-Inbound (trip Line Haul dari origin ke DC) buat tanggal ${dateStr}, gaya santai kayak ngobrol sama rekan
-kerja sendiri (natural, boleh pakai "bro", gak kaku/formal).
+Inbound (trip Line Haul dari origin ke DC) dari SEMUA trip yang tercatat (gak dibatasi satu tanggal
+tertentu — kalau user tanya soal tanggal spesifik, cari sendiri di data berdasarkan field "tanggal"),
+gaya santai kayak ngobrol sama rekan kerja sendiri (natural, boleh pakai "bro", gak kaku/formal).
 
 Arti status: "Late Arrival" = durasi tempuh atdOrigin ke ataDest lebih dari 6.5 jam (atau ETA 6.5 jam
 dari atdOrigin udah lewat tapi belum sampai). "Early Arrived" (kadang disebut Early Arrival) = durasi
@@ -399,10 +388,7 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
   }
 }
 
-document.getElementById("dateInput").valueAsDate = new Date();
 document.getElementById("refreshBtn").addEventListener("click", loadData);
-document.getElementById("liveToggle").addEventListener("change", loadData);
-document.getElementById("dateInput").addEventListener("change", loadData);
 
 document.getElementById("sendBtn").addEventListener("click", () => {
   const input = document.getElementById("chatInput");
@@ -426,7 +412,7 @@ if (window.firebase && firebase.auth){
 
 (async function init(){
   await loadData();
-  addMessage("agent", "Halo bro, gua AI Agent buat mantau trip Inbound hari ini. Tanya aja, misal \"ada yang Late Arrival hari ini?\" atau \"yang paling lama durasinya berapa?\"");
+  addMessage("agent", "Halo bro, gua AI Agent buat mantau trip Inbound (semua tanggal yang tercatat). Tanya aja, misal \"ada yang Late Arrival hari ini?\" atau \"yang paling lama durasinya berapa?\"");
 })();
 </script>
 </body>
