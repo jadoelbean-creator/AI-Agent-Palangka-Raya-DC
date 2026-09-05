@@ -350,6 +350,21 @@ function removeTyping(){
   if (el) el.remove();
 }
 
+// Kalau JSON dari model gagal di-parse (misal kepotong duluan gara-gara panjang),
+// jangan dump mentah-mentah teks JSON-nya ke user (isinya jadi keliatan tanda kutip
+// & "\n" literal). Coba ambil isi field "reply" pakai regex, terus unescape manual
+// karakter escape JSON yang umum (\n \" \\ \t) biar tetep kebaca rapi walau parsing
+// resminya gagal.
+function extractReplyFallback(text){
+  const m = text.match(/"reply"\s*:\s*"((?:\\.|[^"\\])*)/);
+  if (!m) return text;
+  return m[1]
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
+}
+
 async function askAgent(question){
   addMessage("user", question);
   chatHistory.push({role:"user", content: question});
@@ -383,7 +398,7 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
-        max_tokens:1500,
+        max_tokens:4096,
         system: systemPrompt,
         contents: contentsForApi
       })
@@ -406,7 +421,7 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
 
     let parsed;
     try{ parsed = JSON.parse(text); }
-    catch(e){ parsed = { reply: text, attachedTripNums: [] }; }
+    catch(e){ parsed = { reply: extractReplyFallback(text), attachedTripNums: [] }; }
 
     // Gemini cuma ngirim tripNum (string) — data lengkapnya kita ambil sendiri dari
     // currentTrips, bukan dari hasil generate model. Selain lebih ringan/gak gampang
