@@ -73,6 +73,15 @@
   .msg.user .bubble{background:var(--amber); color:#241704; border-bottom-right-radius:4px;}
   .msg.agent .bubble{background:var(--panel-2); border:1px solid var(--line); border-bottom-left-radius:4px;}
   .msg .who{font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);}
+  .bubble-row{display:flex; align-items:flex-end; gap:6px;}
+  .msg.user .bubble-row{flex-direction:row-reverse;}
+  .copy-btn{
+    flex:none; background:transparent; border:1px solid var(--line); color:var(--muted);
+    border-radius:6px; width:26px; height:26px; font-size:13px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-family:inherit;
+  }
+  .copy-btn:hover{color:var(--cyan); border-color:var(--cyan);}
+  .copy-btn.copied{color:var(--cyan); border-color:var(--cyan);}
 
   .attach-card{
     background:var(--paper); color:var(--paper-ink); border-radius:8px;
@@ -291,11 +300,32 @@ function addMessage(role, text, attachUnits){
   const who = document.createElement("div");
   who.className = "who";
   who.textContent = role==="user" ? "Lo" : "Odyssey";
+  const bubbleRow = document.createElement("div");
+  bubbleRow.className = "bubble-row";
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   bubble.textContent = text;
+  bubbleRow.appendChild(bubble);
+  if (role !== "user" && text){
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.type = "button";
+    copyBtn.title = "Copy teks";
+    copyBtn.textContent = "⧉";
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(text).then(() => {
+        copyBtn.textContent = "✓";
+        copyBtn.classList.add("copied");
+        setTimeout(() => { copyBtn.textContent = "⧉"; copyBtn.classList.remove("copied"); }, 1200);
+      }).catch(() => {
+        copyBtn.textContent = "✗";
+        setTimeout(() => { copyBtn.textContent = "⧉"; }, 1200);
+      });
+    });
+    bubbleRow.appendChild(copyBtn);
+  }
   wrap.appendChild(who);
-  wrap.appendChild(bubble);
+  wrap.appendChild(bubbleRow);
   if (attachUnits && attachUnits.length){
     const card = document.createElement("div");
     card.innerHTML = renderAttachCard(attachUnits);
@@ -311,7 +341,7 @@ function addTyping(){
   const el = document.createElement("div");
   el.className = "msg agent";
   el.id = "typingIndicator";
-  el.innerHTML = '<div class="who">Odyssey</div><div class="typing">lagi ngecek data...</div>';
+  el.innerHTML = '<div class="who">AI Agent</div><div class="typing">lagi ngecek data...</div>';
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
 }
