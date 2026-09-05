@@ -311,7 +311,7 @@ function addTyping(){
   const el = document.createElement("div");
   el.className = "msg agent";
   el.id = "typingIndicator";
-  el.innerHTML = '<div class="who">AI Agent</div><div class="typing">lagi ngecek data...</div>';
+  el.innerHTML = '<div class="who">Odyssey</div><div class="typing">lagi ngecek data...</div>';
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
 }
@@ -338,7 +338,7 @@ Data trip tercatat (JSON):
 ${JSON.stringify(currentTrips, null, 2)}
 
 WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdown code fence, persis format ini:
-{"reply": "jawaban singkat santai di sini", "attachedUnits": [ /* array trip object dari data di atas yang relevan sama pertanyaan, kosongkan [] kalau gak relevan/gak ada */ ]}`;
+{"reply": "jawaban singkat santai di sini", "attachedTripNums": [ /* array STRING tripNum doang (bukan object lengkap) dari data di atas yang relevan sama pertanyaan, kosongkan [] kalau gak relevan/gak ada */ ]}`;
 
   // Gemini pakai role "user"/"model" (bukan "user"/"assistant" kayak Anthropic)
   const contentsForApi = chatHistory.map(m => ({
@@ -353,7 +353,7 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
-        max_tokens:1000,
+        max_tokens:1500,
         system: systemPrompt,
         contents: contentsForApi
       })
@@ -376,10 +376,19 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
 
     let parsed;
     try{ parsed = JSON.parse(text); }
-    catch(e){ parsed = { reply: text, attachedUnits: [] }; }
+    catch(e){ parsed = { reply: text, attachedTripNums: [] }; }
+
+    // Gemini cuma ngirim tripNum (string) — data lengkapnya kita ambil sendiri dari
+    // currentTrips, bukan dari hasil generate model. Selain lebih ringan/gak gampang
+    // kepotong, ini juga jamin angka/tanggal yang ditampilin di card SELALU akurat
+    // (gak ke-reproduksi ulang oleh model yang bisa aja typo/keliru).
+    const tripNums = Array.isArray(parsed.attachedTripNums) ? parsed.attachedTripNums : [];
+    const attachedUnits = tripNums
+      .map(num => currentTrips.find(t => t.tripNum === num))
+      .filter(Boolean);
 
     removeTyping();
-    addMessage("agent", parsed.reply || "...", parsed.attachedUnits);
+    addMessage("agent", parsed.reply || "...", attachedUnits);
     chatHistory.push({role:"assistant", content: parsed.reply || ""});
   }catch(e){
     console.error(e);
