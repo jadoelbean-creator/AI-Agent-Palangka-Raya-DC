@@ -401,16 +401,36 @@ document.getElementById("chatInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("sendBtn").click();
 });
 
-// Sama kayak inbound.html: baru mulai sync Firebase SETELAH status login kevalidasi
-if (window.firebase && firebase.auth){
-  try{
-    firebase.auth().onAuthStateChanged(function(user){
+// Sama kayak inbound.html: baru mulai sync Firebase SETELAH status login kevalidasi.
+// PENTING: onAuthStateChanged itu async — walau user udah login, currentUser bisa
+// masih null sesaat pas halaman baru kebuka (SDK lagi restore session). Makanya kita
+// bikin promise yang nunggu callback PERTAMA dari onAuthStateChanged (bukan langsung
+// cek currentUser), biar loadData() gak keburu jalan sebelum auth-nya siap.
+function waitForAuthReady(){
+  return new Promise((resolve) => {
+    if (!window.firebase || !firebase.auth){
+      resolve(null); // auth-guard.js gak ke-load sama sekali, jangan nge-hang, lanjut ke fallback mock
+      return;
+    }
+    let settled = false;
+    const unsubscribe = firebase.auth().onAuthStateChanged(function(user){
       firebaseReady = !!user;
+      if (!settled){
+        settled = true;
+        if (typeof unsubscribe === "function") unsubscribe();
+        resolve(user);
+      }
     });
-  }catch(e){ console.warn("Firebase auth belum siap:", e.message); }
+    // Jaga-jaga kalau onAuthStateChanged gak pernah nembak (mis. auth-guard.js error) —
+    // jangan biarin chat nge-hang selamanya nunggu.
+    setTimeout(() => {
+      if (!settled){ settled = true; resolve(firebase.auth().currentUser || null); }
+    }, 5000);
+  });
 }
 
 (async function init(){
+  await waitForAuthReady();
   await loadData();
   addMessage("agent", "Halo bro, gua AI Agent buat mantau trip Inbound (semua tanggal yang tercatat). Tanya aja, misal \"ada yang Late Arrival hari ini?\" atau \"yang paling lama durasinya berapa?\"");
 })();
