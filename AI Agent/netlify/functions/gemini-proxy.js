@@ -18,7 +18,7 @@
 // 3. Tambah variable: GEMINI_API_KEY = AIzaSy... (API key dari langkah 1)
 // 4. Deploy ulang site (env var baru butuh deploy baru biar ke-pickup)
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_MODEL = "gemini-3.6-flash";
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/" +
   GEMINI_MODEL + ":generateContent";
