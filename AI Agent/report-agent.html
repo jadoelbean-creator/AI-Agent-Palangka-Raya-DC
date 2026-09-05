@@ -11,9 +11,9 @@
 <!-- Firebase SDK — sama persis pola yang dipakai di inbound.html / outbound.html.
      auth-guard.js yang nyimpen firebaseConfig asli & handle login redirect.
      Taruh file ini di folder project yang SAMA dengan auth-guard.js biar konek otomatis.
-     Chat AI-nya manggil Google Gemini API (free tier) lewat proxy Netlify Function
-     di netlify/functions/gemini-proxy.js — API key disimpan aman di server (env
-     variable GEMINI_API_KEY), gak pernah ke-expose di browser. -->
+     Chat AI-nya manggil Groq API (model openai/gpt-oss-120b) lewat proxy Netlify
+     Function di netlify/functions/groq-proxy.js — API key disimpan aman di server
+     (env variable GROQ_API_KEY), gak pernah ke-expose di browser. -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
@@ -53,6 +53,12 @@
   }
   .topbar .stat{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted);}
   .topbar .stat b{color:var(--text);}
+  .switch{position:relative; width:34px; height:18px; flex:none;}
+  .switch input{opacity:0; width:0; height:0; position:absolute;}
+  .slider{position:absolute; inset:0; background:#39424F; border-radius:20px; cursor:pointer; transition:.15s;}
+  .slider:before{content:""; position:absolute; height:12px; width:12px; left:3px; top:3px; background:var(--text); border-radius:50%; transition:.15s;}
+  .switch input:checked + .slider{background:var(--cyan);}
+  .switch input:checked + .slider:before{transform:translateX(16px); background:#0D1A18;}
   .spacer{flex:1;}
   .icon-btn{
     background:transparent; border:1px solid var(--line); color:var(--muted);
@@ -73,15 +79,6 @@
   .msg.user .bubble{background:var(--amber); color:#241704; border-bottom-right-radius:4px;}
   .msg.agent .bubble{background:var(--panel-2); border:1px solid var(--line); border-bottom-left-radius:4px;}
   .msg .who{font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);}
-  .bubble-row{display:flex; align-items:flex-end; gap:6px;}
-  .msg.user .bubble-row{flex-direction:row-reverse;}
-  .copy-btn{
-    flex:none; background:transparent; border:1px solid var(--line); color:var(--muted);
-    border-radius:6px; width:26px; height:26px; font-size:13px; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; font-family:inherit;
-  }
-  .copy-btn:hover{color:var(--cyan); border-color:var(--cyan);}
-  .copy-btn.copied{color:var(--cyan); border-color:var(--cyan);}
 
   .attach-card{
     background:var(--paper); color:var(--paper-ink); border-radius:8px;
@@ -116,6 +113,10 @@
   }
   .chat-input-row button:disabled{opacity:.5; cursor:default;}
 
+  details.note-details{margin-top:12px; font-size:12px; color:var(--muted);}
+  details.note-details summary{cursor:pointer; color:var(--cyan);}
+  details.note-details .inner{padding:10px 2px 2px; line-height:1.6;}
+  details.note-details code{background:var(--panel-2); padding:1px 5px; border-radius:4px; font-family:'IBM Plex Mono',monospace;}
 </style>
 </head>
 <body>
@@ -209,18 +210,6 @@ function computeStatus(t){
   return { statusText, etaDateObj };
 }
 
-// Sama persis kayak formatDateYYYYMMDD di inbound.html — pakai komponen
-// tanggal LOKAL (getFullYear/getMonth/getDate), BUKAN toISOString().
-// toISOString() selalu balikin tanggal UTC, jadi trip yang atdOrigin-nya
-// jam 00:00-06:59 WIB bakal "mundur" ke hari sebelumnya kalau dihitung
-// pakai toISOString() — ini penyebab Odyssey suka bilang "gak ada Late
-// Arrival hari ini" padahal di dashboard ada.
-function formatDateYYYYMMDDLocal(d){
-  if (!d) return null;
-  const pad = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-}
-
 function normalizeTrip(t){
   const { statusText, etaDateObj } = computeStatus(t);
   const dateSourceRaw = t.atdOrigin || t.stdOrigin;
@@ -238,27 +227,26 @@ function normalizeTrip(t){
     atdOrigin: t.atdOrigin || null,
     ataDest: t.ataDest || null,
     etaDest: etaDateObj ? etaDateObj.toISOString() : null,
-    tanggal: dateSource && !isNaN(dateSource) ? formatDateYYYYMMDDLocal(dateSource) : null,
+    tanggal: dateSource && !isNaN(dateSource) ? dateSource.toISOString().slice(0,10) : null,
     status: statusText
   };
 }
 
 async function loadData(){
-  document.getElementById("statusLine").textContent = "mode: live firebase — memuat...";
+  // Auto: kalau session login (auth-guard.js) udah kevalidasi, langsung sync live
+  // dari Firebase. Kalau belum login / firebase belum siap, fallback ke data contoh.
+  const isLive = firebaseReady;
+  document.getElementById("statusLine").textContent = "mode: " + (isLive?"live firebase":"mock data") + " — memuat...";
   try{
-    const raw = await fetchLiveTrips();
-    const normalized = raw.map(normalizeTrip);
-    currentTrips = normalized;
-    document.getElementById("quickStat").innerHTML = "<b>"+currentTrips.length+"</b> trip tercatat";
-    document.getElementById("statusLine").textContent = "mode: live firebase";
-  }catch(e){
-    console.error(e);
-    // Firebase belum siap (misal belum login) — fallback sementara ke data contoh
-    // biar chat tetap bisa dipakai, sambil nunjukkin statusnya di statusLine.
-    const raw = generateMockData();
+    const raw = isLive ? await fetchLiveTrips() : generateMockData();
+    // Semua tanggal ditampung tanpa difilter — AI Agent yang nyortir sendiri
+    // berdasarkan field "tanggal" tiap trip waktu ada pertanyaan soal tanggal tertentu.
     currentTrips = raw.map(normalizeTrip);
     document.getElementById("quickStat").innerHTML = "<b>"+currentTrips.length+"</b> trip tercatat";
-    document.getElementById("statusLine").textContent = "gagal konek Firebase (" + e.message + ") — pakai data contoh sementara";
+    document.getElementById("statusLine").textContent = "mode: " + (isLive?"live firebase":"mock data");
+  }catch(e){
+    console.error(e);
+    document.getElementById("statusLine").textContent = "gagal ambil data live: " + e.message;
   }
 }
 
@@ -300,32 +288,11 @@ function addMessage(role, text, attachUnits){
   const who = document.createElement("div");
   who.className = "who";
   who.textContent = role==="user" ? "Lo" : "Odyssey";
-  const bubbleRow = document.createElement("div");
-  bubbleRow.className = "bubble-row";
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   bubble.textContent = text;
-  bubbleRow.appendChild(bubble);
-  if (role !== "user" && text){
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-btn";
-    copyBtn.type = "button";
-    copyBtn.title = "Copy teks";
-    copyBtn.textContent = "⧉";
-    copyBtn.addEventListener("click", () => {
-      navigator.clipboard.writeText(text).then(() => {
-        copyBtn.textContent = "✓";
-        copyBtn.classList.add("copied");
-        setTimeout(() => { copyBtn.textContent = "⧉"; copyBtn.classList.remove("copied"); }, 1200);
-      }).catch(() => {
-        copyBtn.textContent = "✗";
-        setTimeout(() => { copyBtn.textContent = "⧉"; }, 1200);
-      });
-    });
-    bubbleRow.appendChild(copyBtn);
-  }
   wrap.appendChild(who);
-  wrap.appendChild(bubbleRow);
+  wrap.appendChild(bubble);
   if (attachUnits && attachUnits.length){
     const card = document.createElement("div");
     card.innerHTML = renderAttachCard(attachUnits);
@@ -350,30 +317,18 @@ function removeTyping(){
   if (el) el.remove();
 }
 
-// Kalau JSON dari model gagal di-parse (misal kepotong duluan gara-gara panjang),
-// jangan dump mentah-mentah teks JSON-nya ke user (isinya jadi keliatan tanda kutip
-// & "\n" literal). Coba ambil isi field "reply" pakai regex, terus unescape manual
-// karakter escape JSON yang umum (\n \" \\ \t) biar tetep kebaca rapi walau parsing
-// resminya gagal.
-function extractReplyFallback(text){
-  const m = text.match(/"reply"\s*:\s*"((?:\\.|[^"\\])*)/);
-  if (!m) return text;
-  return m[1]
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, "\\");
-}
-
 async function askAgent(question){
   addMessage("user", question);
   chatHistory.push({role:"user", content: question});
   addTyping();
 
   const systemPrompt = `Kamu AI Agent buat Shift Lead Sortation Center. Kamu jawab pertanyaan soal data
-Inbound (trip Line Haul dari origin ke DC) dari SEMUA trip yang tercatat (gak dibatasi satu tanggal
-tertentu — kalau user tanya soal tanggal spesifik, cari sendiri di data berdasarkan field "tanggal"),
-gaya santai kayak ngobrol sama rekan kerja sendiri (natural, boleh pakai "bro", gak kaku/formal).
+Inbound (trip Line Haul dari origin ke DC), gaya santai kayak ngobrol sama rekan kerja sendiri (natural,
+boleh pakai "bro", gak kaku/formal).
+
+Data di bawah mencakup SEMUA tanggal yang ada (gak difilter otomatis). Tiap trip punya field "tanggal"
+(format YYYY-MM-DD). Kalau user nanya soal "hari ini", "kemarin", atau tanggal tertentu, kamu yang
+nyortir sendiri dari field "tanggal" itu — jangan asumsi semua data itu buat satu tanggal yang sama.
 
 Arti status: "Late Arrival" = durasi tempuh atdOrigin ke ataDest lebih dari 6.5 jam (atau ETA 6.5 jam
 dari atdOrigin udah lewat tapi belum sampai). "Early Arrived" (kadang disebut Early Arrival) = durasi
@@ -383,24 +338,24 @@ Data trip tercatat (JSON):
 ${JSON.stringify(currentTrips, null, 2)}
 
 WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdown code fence, persis format ini:
-{"reply": "jawaban singkat santai di sini", "attachedTripNums": [ /* array STRING tripNum doang (bukan object lengkap) dari data di atas yang relevan sama pertanyaan, kosongkan [] kalau gak relevan/gak ada */ ]}`;
+{"reply": "jawaban singkat santai di sini", "attachedUnits": [ /* array trip object dari data di atas yang relevan sama pertanyaan, kosongkan [] kalau gak relevan/gak ada */ ]}`;
 
-  // Gemini pakai role "user"/"model" (bukan "user"/"assistant" kayak Anthropic)
-  const contentsForApi = chatHistory.map(m => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }]
+  // Groq pakai format OpenAI-compatible: role "user"/"assistant" langsung, isi di field "content"
+  const messagesForApi = chatHistory.map(m => ({
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: m.content
   }));
 
   try{
-    // Panggil lewat Netlify Function proxy (bukan langsung ke Gemini) supaya
-    // API key gak pernah ke-expose di browser. Lihat netlify/functions/gemini-proxy.js
-    const response = await fetch("/.netlify/functions/gemini-proxy", {
+    // Panggil lewat Netlify Function proxy (bukan langsung ke Groq) supaya
+    // API key gak pernah ke-expose di browser. Lihat netlify/functions/groq-proxy.js
+    const response = await fetch("/.netlify/functions/groq-proxy", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
-        max_tokens:4096,
+        max_tokens:1000,
         system: systemPrompt,
-        contents: contentsForApi
+        messages: messagesForApi
       })
     });
     const rawText = await response.text();
@@ -413,27 +368,18 @@ WAJIB balas HANYA dengan JSON valid, tanpa teks lain di luar JSON, tanpa markdow
     if (!response.ok){
       throw new Error((data && data.error && data.error.message) ? data.error.message : ((data && data.error) ? data.error : ("HTTP " + response.status + " (respons kosong)")));
     }
-    const candidate = (data.candidates && data.candidates[0]) || null;
-    let text = candidate && candidate.content && candidate.content.parts
-      ? candidate.content.parts.map(p => p.text||"").join("\n").trim()
+    const choice = (data.choices && data.choices[0]) || null;
+    let text = choice && choice.message && choice.message.content
+      ? String(choice.message.content).trim()
       : "";
     text = text.replace(/^```json/i,"").replace(/^```/,"").replace(/```$/,"").trim();
 
     let parsed;
     try{ parsed = JSON.parse(text); }
-    catch(e){ parsed = { reply: extractReplyFallback(text), attachedTripNums: [] }; }
-
-    // Gemini cuma ngirim tripNum (string) — data lengkapnya kita ambil sendiri dari
-    // currentTrips, bukan dari hasil generate model. Selain lebih ringan/gak gampang
-    // kepotong, ini juga jamin angka/tanggal yang ditampilin di card SELALU akurat
-    // (gak ke-reproduksi ulang oleh model yang bisa aja typo/keliru).
-    const tripNums = Array.isArray(parsed.attachedTripNums) ? parsed.attachedTripNums : [];
-    const attachedUnits = tripNums
-      .map(num => currentTrips.find(t => t.tripNum === num))
-      .filter(Boolean);
+    catch(e){ parsed = { reply: text, attachedUnits: [] }; }
 
     removeTyping();
-    addMessage("agent", parsed.reply || "...", attachedUnits);
+    addMessage("agent", parsed.reply || "...", parsed.attachedUnits);
     chatHistory.push({role:"assistant", content: parsed.reply || ""});
   }catch(e){
     console.error(e);
@@ -456,37 +402,21 @@ document.getElementById("chatInput").addEventListener("keydown", (e) => {
 });
 
 // Sama kayak inbound.html: baru mulai sync Firebase SETELAH status login kevalidasi.
-// PENTING: onAuthStateChanged itu async — walau user udah login, currentUser bisa
-// masih null sesaat pas halaman baru kebuka (SDK lagi restore session). Makanya kita
-// bikin promise yang nunggu callback PERTAMA dari onAuthStateChanged (bukan langsung
-// cek currentUser), biar loadData() gak keburu jalan sebelum auth-nya siap.
-function waitForAuthReady(){
-  return new Promise((resolve) => {
-    if (!window.firebase || !firebase.auth){
-      resolve(null); // auth-guard.js gak ke-load sama sekali, jangan nge-hang, lanjut ke fallback mock
-      return;
-    }
-    let settled = false;
-    const unsubscribe = firebase.auth().onAuthStateChanged(function(user){
+// Begitu status login berubah (mis. auth-guard.js baru selesai validasi setelah
+// halaman ke-render), langsung auto-reload data dari live Firebase.
+if (window.firebase && firebase.auth){
+  try{
+    firebase.auth().onAuthStateChanged(function(user){
+      const wasReady = firebaseReady;
       firebaseReady = !!user;
-      if (!settled){
-        settled = true;
-        if (typeof unsubscribe === "function") unsubscribe();
-        resolve(user);
-      }
+      if (firebaseReady && !wasReady) loadData();
     });
-    // Jaga-jaga kalau onAuthStateChanged gak pernah nembak (mis. auth-guard.js error) —
-    // jangan biarin chat nge-hang selamanya nunggu.
-    setTimeout(() => {
-      if (!settled){ settled = true; resolve(firebase.auth().currentUser || null); }
-    }, 5000);
-  });
+  }catch(e){ console.warn("Firebase auth belum siap:", e.message); }
 }
 
 (async function init(){
-  await waitForAuthReady();
   await loadData();
-  addMessage("agent", "Halo bro, gua AI Agent buat mantau trip Inbound (semua tanggal yang tercatat). Tanya aja, misal \"ada yang Late Arrival hari ini?\" atau \"yang paling lama durasinya berapa?\"");
+  addMessage("agent", "Halo bro, gua AI Agent buat mantau trip Inbound hari ini. Tanya aja, misal \"ada yang Late Arrival hari ini?\" atau \"yang paling lama durasinya berapa?\"");
 })();
 </script>
 </body>
